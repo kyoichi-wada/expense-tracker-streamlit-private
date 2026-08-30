@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+local.settings.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.idea/
+.vscode/
+.python_packages/
+*.log
+
+# Local/private artifacts
+.venv

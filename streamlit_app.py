@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+import secrets
 from contextlib import contextmanager
 from typing import Any
 
@@ -8,6 +9,7 @@ import psycopg2
 from psycopg2 import pool, sql
 from psycopg2.extras import RealDictCursor
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 
 st.set_page_config(page_title="家計簿入力", page_icon="🧾", layout="wide")
@@ -65,9 +67,12 @@ st.markdown(
 )
 
 def get_setting(name: str, default: str | None = None) -> str | None:
-    if name in st.secrets:
-        value = st.secrets.get(name)
-        return str(value) if value is not None else default
+    try:
+        if name in st.secrets:
+            value = st.secrets.get(name)
+            return str(value) if value is not None else default
+    except StreamlitSecretNotFoundError:
+        pass
     return os.getenv(name, default)
 
 
@@ -365,8 +370,80 @@ def ensure_db_settings():
         st.stop()
 
 
+AUTH_ENABLED = (get_setting("AUTH_ENABLED", "false") or "false").lower() == "true"
+AUTH_STAGE = (get_setting("AUTH_STAGE", "password") or "password").lower()
+APP_PASSWORD = get_setting("APP_PASSWORD", "") or ""
+APP_ALLOWED_EMAILS = get_setting("APP_ALLOWED_EMAILS", "") or ""
+
+
+def parse_allowed_emails(raw: str) -> set[str]:
+    return {
+        item.strip().lower()
+        for item in raw.replace(";", ",").split(",")
+        if item.strip()
+    }
+
+
+def require_authentication():
+    if not AUTH_ENABLED:
+        return
+
+    if st.session_state.get("auth_ok"):
+        return
+
+    st.markdown("## Private Access")
+    st.caption("このアプリは認証が必要です。")
+
+    if AUTH_STAGE == "oauth":
+        st.warning("OAuth は未実装です。AUTH_STAGE を password か allowlist に設定してください。")
+        st.stop()
+
+    if not APP_PASSWORD:
+        st.error("APP_PASSWORD が未設定です。Streamlit Secrets を設定してください。")
+        st.stop()
+
+    with st.form("auth_form", clear_on_submit=False):
+        email = ""
+        if AUTH_STAGE == "allowlist":
+            email = (st.text_input("メールアドレス", placeholder="you@example.com") or "").strip().lower()
+        password = st.text_input("共有パスワード", type="password")
+        submitted = st.form_submit_button("ログイン", use_container_width=True)
+
+    if submitted:
+        if AUTH_STAGE == "allowlist":
+            allowlist = parse_allowed_emails(APP_ALLOWED_EMAILS)
+            if not email:
+                st.error("メールアドレスを入力してください。")
+                st.stop()
+            if not allowlist:
+                st.error("APP_ALLOWED_EMAILS が未設定です。")
+                st.stop()
+            if email not in allowlist:
+                st.error("このメールアドレスは許可されていません。")
+                st.stop()
+
+        if secrets.compare_digest(password, APP_PASSWORD):
+            st.session_state["auth_ok"] = True
+            st.session_state["auth_time"] = dt.datetime.utcnow().isoformat()
+            st.rerun()
+        else:
+            st.error("パスワードが違います。")
+
+    st.stop()
+
+
 st.markdown('<div class="app-title">家計簿アプリ</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-sub">記帳・明細確認・修正・削除をひとつの画面で操作できます</div>', unsafe_allow_html=True)
+
+require_authentication()
+
+if AUTH_ENABLED and st.session_state.get("auth_ok"):
+    with st.sidebar:
+        st.caption("認証済み")
+        if st.button("ログアウト", use_container_width=True):
+            st.session_state.pop("auth_ok", None)
+            st.session_state.pop("auth_time", None)
+            st.rerun()
 
 ensure_db_settings()
 

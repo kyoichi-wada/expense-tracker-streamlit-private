@@ -423,8 +423,29 @@ def get_oauth_user_email() -> str:
     user_obj = getattr(st, "user", None)
     if user_obj is None:
         return ""
-    email = getattr(user_obj, "email", "")
-    return str(email or "").strip().lower()
+
+    # Provider-specific claims differ; Entra often returns preferred_username.
+    attr_candidates = [
+        "email",
+        "preferred_username",
+        "upn",
+        "user_principal_name",
+    ]
+    for attr_name in attr_candidates:
+        value = getattr(user_obj, attr_name, "")
+        normalized = str(value or "").strip().lower()
+        if normalized:
+            return normalized
+
+    get_fn = getattr(user_obj, "get", None)
+    if callable(get_fn):
+        for key in attr_candidates:
+            value = get_fn(key, "")
+            normalized = str(value or "").strip().lower()
+            if normalized:
+                return normalized
+
+    return ""
 
 
 def is_oauth_logged_in() -> bool:
@@ -449,6 +470,16 @@ def ensure_oauth_authenticated():
 
     oauth_email = get_oauth_user_email()
     allowlist = parse_allowed_emails(APP_ALLOWED_EMAILS)
+    if not oauth_email:
+        append_auth_audit("oauth_missing_email_claim", "no_email_or_upn")
+        st.error(
+            "IDプロバイダーからメール情報を取得できませんでした。"
+            " Entra 側で email か preferred_username のクレームを確認してください。"
+        )
+        if st.button("OAuthログアウト", use_container_width=True):
+            st.logout()
+        st.stop()
+
     if allowlist and oauth_email not in allowlist:
         append_auth_audit("oauth_email_rejected", oauth_email or "empty_email")
         st.error("このメールアドレスは許可されていません。")

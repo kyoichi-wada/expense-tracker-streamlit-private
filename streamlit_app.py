@@ -479,12 +479,12 @@ def require_authentication():
             append_auth_audit("session_expired", f"ttl={AUTH_SESSION_TTL_MINUTES}m")
             st.warning("セッションの有効期限が切れたため、再ログインしてください。")
 
-    st.markdown("## Private Access")
-    st.caption("このアプリは認証が必要です。")
-
     if AUTH_STAGE == "oauth":
         ensure_oauth_authenticated()
         return
+
+    st.markdown("## Private Access")
+    st.caption("このアプリは認証が必要です。")
 
     if not APP_PASSWORD:
         st.error("APP_PASSWORD が未設定です。Streamlit Secrets を設定してください。")

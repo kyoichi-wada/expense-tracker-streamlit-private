@@ -372,6 +372,7 @@ def ensure_db_settings():
 
 AUTH_ENABLED = (get_setting("AUTH_ENABLED", "false") or "false").lower() == "true"
 AUTH_STAGE = (get_setting("AUTH_STAGE", "password") or "password").lower()
+OAUTH_PROVIDER = (get_setting("OAUTH_PROVIDER", "") or "").strip()
 APP_PASSWORD = get_setting("APP_PASSWORD", "") or ""
 APP_ALLOWED_EMAILS = get_setting("APP_ALLOWED_EMAILS", "") or ""
 AUTH_MAX_ATTEMPTS = int(get_setting("AUTH_MAX_ATTEMPTS", "5") or "5")
@@ -455,9 +456,46 @@ def is_oauth_logged_in() -> bool:
     return bool(getattr(user_obj, "is_logged_in", False))
 
 
+def oauth_settings_error() -> str | None:
+    try:
+        secrets_root = st.secrets
+    except StreamlitSecretNotFoundError:
+        return "Secrets が未設定です。Streamlit 側に OAuth 設定を追加してください。"
+
+    auth_cfg = secrets_root.get("auth")
+    if auth_cfg is None:
+        return "Secrets の [auth] セクションが見つかりません。"
+
+    required_shared = ["redirect_uri", "cookie_secret"]
+    for key in required_shared:
+        if not auth_cfg.get(key):
+            return f"[auth] の {key} が未設定です。"
+
+    required_provider = ["client_id", "client_secret", "server_metadata_url"]
+    if OAUTH_PROVIDER:
+        provider_cfg = auth_cfg.get(OAUTH_PROVIDER)
+        if provider_cfg is None:
+            return f"[auth.{OAUTH_PROVIDER}] が未設定です。"
+        for key in required_provider:
+            if not provider_cfg.get(key):
+                return f"[auth.{OAUTH_PROVIDER}] の {key} が未設定です。"
+        return None
+
+    for key in required_provider:
+        if not auth_cfg.get(key):
+            return f"[auth] の {key} が未設定です。"
+    return None
+
+
 def ensure_oauth_authenticated():
     if not hasattr(st, "login") or not hasattr(st, "logout"):
         st.error("この環境の Streamlit では OAuth 機能が使えません。バージョンを更新してください。")
+        st.stop()
+
+    settings_error = oauth_settings_error()
+    if settings_error:
+        st.error("OAuth 設定に不備があります。")
+        st.caption(settings_error)
         st.stop()
 
     if not is_oauth_logged_in():
@@ -465,7 +503,10 @@ def ensure_oauth_authenticated():
         st.caption("このアプリは OAuth ログインが必要です。")
         if st.button("OAuthでログイン", use_container_width=True):
             append_auth_audit("oauth_login_start", "user_action")
-            st.login()
+            if OAUTH_PROVIDER:
+                st.login(OAUTH_PROVIDER)
+            else:
+                st.login()
         st.stop()
 
     oauth_email = get_oauth_user_email()

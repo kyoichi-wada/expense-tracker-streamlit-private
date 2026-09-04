@@ -419,6 +419,49 @@ def clear_auth_session():
     st.session_state.pop("auth_time", None)
 
 
+def get_oauth_user_email() -> str:
+    user_obj = getattr(st, "user", None)
+    if user_obj is None:
+        return ""
+    email = getattr(user_obj, "email", "")
+    return str(email or "").strip().lower()
+
+
+def is_oauth_logged_in() -> bool:
+    user_obj = getattr(st, "user", None)
+    if user_obj is None:
+        return False
+    return bool(getattr(user_obj, "is_logged_in", False))
+
+
+def ensure_oauth_authenticated():
+    if not hasattr(st, "login") or not hasattr(st, "logout"):
+        st.error("この環境の Streamlit では OAuth 機能が使えません。バージョンを更新してください。")
+        st.stop()
+
+    if not is_oauth_logged_in():
+        st.markdown("## Private Access")
+        st.caption("このアプリは OAuth ログインが必要です。")
+        if st.button("OAuthでログイン", use_container_width=True):
+            append_auth_audit("oauth_login_start", "user_action")
+            st.login()
+        st.stop()
+
+    oauth_email = get_oauth_user_email()
+    allowlist = parse_allowed_emails(APP_ALLOWED_EMAILS)
+    if allowlist and oauth_email not in allowlist:
+        append_auth_audit("oauth_email_rejected", oauth_email or "empty_email")
+        st.error("このメールアドレスは許可されていません。")
+        if st.button("OAuthログアウト", use_container_width=True):
+            st.logout()
+        st.stop()
+
+    st.session_state["auth_ok"] = True
+    st.session_state["auth_time"] = utcnow().isoformat()
+    st.session_state["auth_oauth_email"] = oauth_email
+    append_auth_audit("oauth_login_success", oauth_email or "unknown")
+
+
 def require_authentication():
     if not AUTH_ENABLED:
         return
@@ -440,8 +483,8 @@ def require_authentication():
     st.caption("このアプリは認証が必要です。")
 
     if AUTH_STAGE == "oauth":
-        st.warning("OAuth は未実装です。AUTH_STAGE を password か allowlist に設定してください。")
-        st.stop()
+        ensure_oauth_authenticated()
+        return
 
     if not APP_PASSWORD:
         st.error("APP_PASSWORD が未設定です。Streamlit Secrets を設定してください。")
@@ -516,6 +559,10 @@ require_authentication()
 if AUTH_ENABLED and st.session_state.get("auth_ok"):
     with st.sidebar:
         st.caption("認証済み")
+        if AUTH_STAGE == "oauth":
+            oauth_email = st.session_state.get("auth_oauth_email", "")
+            if oauth_email:
+                st.caption(f"OAuth: {oauth_email}")
         auth_time_raw = st.session_state.get("auth_time", "")
         auth_time = parse_iso_datetime(auth_time_raw)
         if auth_time:
@@ -534,6 +581,8 @@ if AUTH_ENABLED and st.session_state.get("auth_ok"):
         if st.button("ログアウト", use_container_width=True):
             append_auth_audit("logout", "user_action")
             clear_auth_session()
+            if AUTH_STAGE == "oauth" and hasattr(st, "logout"):
+                st.logout()
             st.rerun()
 
 ensure_db_settings()

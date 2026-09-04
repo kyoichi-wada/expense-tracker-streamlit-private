@@ -374,6 +374,10 @@ AUTH_ENABLED = (get_setting("AUTH_ENABLED", "false") or "false").lower() == "tru
 AUTH_STAGE = (get_setting("AUTH_STAGE", "password") or "password").lower()
 APP_PASSWORD = get_setting("APP_PASSWORD", "") or ""
 APP_ALLOWED_EMAILS = get_setting("APP_ALLOWED_EMAILS", "") or ""
+AUTH_MAX_ATTEMPTS = int(get_setting("AUTH_MAX_ATTEMPTS", "5") or "5")
+AUTH_LOCK_MINUTES = int(get_setting("AUTH_LOCK_MINUTES", "15") or "15")
+AUTH_SESSION_TTL_MINUTES = int(get_setting("AUTH_SESSION_TTL_MINUTES", "480") or "480")
+AUTH_SHOW_AUDIT = (get_setting("AUTH_SHOW_AUDIT", "true") or "true").lower() == "true"
 
 
 def parse_allowed_emails(raw: str) -> set[str]:
@@ -384,12 +388,53 @@ def parse_allowed_emails(raw: str) -> set[str]:
     }
 
 
+def utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def parse_iso_datetime(raw: str) -> dt.datetime | None:
+    try:
+        value = dt.datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc)
+
+
+def append_auth_audit(event: str, detail: str = ""):
+    logs = st.session_state.get("auth_audit_logs", [])
+    logs.append(
+        {
+            "time": utcnow().isoformat(timespec="seconds"),
+            "event": event,
+            "detail": detail,
+        }
+    )
+    st.session_state["auth_audit_logs"] = logs[-30:]
+
+
+def clear_auth_session():
+    st.session_state.pop("auth_ok", None)
+    st.session_state.pop("auth_time", None)
+
+
 def require_authentication():
     if not AUTH_ENABLED:
         return
 
     if st.session_state.get("auth_ok"):
-        return
+        auth_time = parse_iso_datetime(st.session_state.get("auth_time", ""))
+        if auth_time is None:
+            clear_auth_session()
+            append_auth_audit("session_reset", "invalid_auth_time")
+        else:
+            ttl_deadline = auth_time + dt.timedelta(minutes=max(AUTH_SESSION_TTL_MINUTES, 1))
+            if utcnow() <= ttl_deadline:
+                return
+            clear_auth_session()
+            append_auth_audit("session_expired", f"ttl={AUTH_SESSION_TTL_MINUTES}m")
+            st.warning("セッションの有効期限が切れたため、再ログインしてください。")
 
     st.markdown("## Private Access")
     st.caption("このアプリは認証が必要です。")
@@ -402,6 +447,22 @@ def require_authentication():
         st.error("APP_PASSWORD が未設定です。Streamlit Secrets を設定してください。")
         st.stop()
 
+    max_attempts = max(AUTH_MAX_ATTEMPTS, 1)
+    lock_minutes = max(AUTH_LOCK_MINUTES, 1)
+    failed_attempts = int(st.session_state.get("auth_failed_attempts", 0))
+    lock_until = parse_iso_datetime(st.session_state.get("auth_lock_until", ""))
+
+    if lock_until and utcnow() < lock_until:
+        remain = lock_until - utcnow()
+        remain_minutes = max(1, int(remain.total_seconds() // 60) + 1)
+        st.error(f"ログイン試行回数が上限に達しました。約 {remain_minutes} 分後に再試行してください。")
+        st.stop()
+
+    if lock_until and utcnow() >= lock_until:
+        st.session_state["auth_lock_until"] = ""
+        st.session_state["auth_failed_attempts"] = 0
+        append_auth_audit("lock_released", "cooldown_finished")
+
     with st.form("auth_form", clear_on_submit=False):
         email = ""
         if AUTH_STAGE == "allowlist":
@@ -410,24 +471,39 @@ def require_authentication():
         submitted = st.form_submit_button("ログイン", use_container_width=True)
 
     if submitted:
+        def mark_failed(reason: str):
+            attempts = int(st.session_state.get("auth_failed_attempts", 0)) + 1
+            st.session_state["auth_failed_attempts"] = attempts
+            append_auth_audit("login_failed", reason)
+            if attempts >= max_attempts:
+                locked_until = utcnow() + dt.timedelta(minutes=lock_minutes)
+                st.session_state["auth_lock_until"] = locked_until.isoformat()
+                append_auth_audit("locked", f"for={lock_minutes}m")
+                st.error(f"試行回数が上限に達しました。{lock_minutes} 分間ロックします。")
+            else:
+                st.error(f"認証に失敗しました。残り {max_attempts - attempts} 回です。")
+
         if AUTH_STAGE == "allowlist":
             allowlist = parse_allowed_emails(APP_ALLOWED_EMAILS)
             if not email:
-                st.error("メールアドレスを入力してください。")
+                mark_failed("empty_email")
                 st.stop()
             if not allowlist:
                 st.error("APP_ALLOWED_EMAILS が未設定です。")
                 st.stop()
             if email not in allowlist:
-                st.error("このメールアドレスは許可されていません。")
+                mark_failed("email_not_allowed")
                 st.stop()
 
         if secrets.compare_digest(password, APP_PASSWORD):
             st.session_state["auth_ok"] = True
-            st.session_state["auth_time"] = dt.datetime.utcnow().isoformat()
+            st.session_state["auth_time"] = utcnow().isoformat()
+            st.session_state["auth_failed_attempts"] = 0
+            st.session_state["auth_lock_until"] = ""
+            append_auth_audit("login_success", AUTH_STAGE)
             st.rerun()
         else:
-            st.error("パスワードが違います。")
+            mark_failed("wrong_password")
 
     st.stop()
 
@@ -440,9 +516,24 @@ require_authentication()
 if AUTH_ENABLED and st.session_state.get("auth_ok"):
     with st.sidebar:
         st.caption("認証済み")
+        auth_time_raw = st.session_state.get("auth_time", "")
+        auth_time = parse_iso_datetime(auth_time_raw)
+        if auth_time:
+            expires_at = auth_time + dt.timedelta(minutes=max(AUTH_SESSION_TTL_MINUTES, 1))
+            st.caption(f"有効期限(UTC): {expires_at.strftime('%Y-%m-%d %H:%M')}")
+
+        if AUTH_SHOW_AUDIT:
+            with st.expander("認証ログ(このセッション)", expanded=False):
+                logs = st.session_state.get("auth_audit_logs", [])
+                if not logs:
+                    st.caption("まだログはありません。")
+                else:
+                    log_df = pd.DataFrame(logs)
+                    st.dataframe(log_df.iloc[::-1], width="stretch", hide_index=True)
+
         if st.button("ログアウト", use_container_width=True):
-            st.session_state.pop("auth_ok", None)
-            st.session_state.pop("auth_time", None)
+            append_auth_audit("logout", "user_action")
+            clear_auth_session()
             st.rerun()
 
 ensure_db_settings()

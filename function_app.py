@@ -222,6 +222,36 @@ def parse_target_date(value: str) -> datetime.date:
     return datetime.datetime.strptime(value, "%Y-%m-%d").date()
 
 
+def parse_bool_param(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def month_end(target_date: datetime.date) -> datetime.date:
+    if target_date.month == 12:
+        next_month = datetime.date(target_date.year + 1, 1, 1)
+    else:
+        next_month = datetime.date(target_date.year, target_date.month + 1, 1)
+    return next_month - datetime.timedelta(days=1)
+
+
+def get_budget_base_date(include_future: bool) -> datetime.date:
+    try:
+        tz = ZoneInfo(MONTHLY_FIXED_EXPENSE_TZ)
+    except Exception:
+        tz = ZoneInfo("Asia/Tokyo")
+
+    today_local = datetime.datetime.now(datetime.timezone.utc).astimezone(tz).date()
+    return month_end(today_local) if include_future else today_local
+
+
 def load_budget_progress(as_of_date: datetime.date):
     query = """
         WITH budget_target AS (
@@ -377,6 +407,7 @@ def get_budget_diff(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("GET /expense/budget/diff triggered.")
 
     as_of_date_raw = req.params.get("as_of_date")
+    include_future = parse_bool_param(req.params.get("include_future"), default=True)
     if as_of_date_raw:
         try:
             as_of_date = parse_target_date(as_of_date_raw)
@@ -387,7 +418,7 @@ def get_budget_diff(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=400,
             )
     else:
-        as_of_date = datetime.date.today()
+            as_of_date = get_budget_base_date(include_future)
 
     try:
         progress = load_budget_progress(as_of_date)
@@ -407,6 +438,7 @@ def get_budget_diff(req: func.HttpRequest) -> func.HttpResponse:
         diff = int(round(progress["denominator"] - progress["numerator"]))
         response = {
             "as_of_date": as_of_date.isoformat(),
+            "include_future": include_future,
             "fiscal_year": progress["fiscal_year"],
             "annual_budget": progress["annual_budget"],
             "elapsed_months": progress["elapsed_months"],

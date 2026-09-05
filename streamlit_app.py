@@ -503,10 +503,19 @@ def ensure_oauth_authenticated():
         st.caption("このアプリは OAuth ログインが必要です。")
         if st.button("OAuthでログイン", use_container_width=True):
             append_auth_audit("oauth_login_start", "user_action")
-            if OAUTH_PROVIDER:
-                st.login(OAUTH_PROVIDER)
-            else:
-                st.login()
+            try:
+                if OAUTH_PROVIDER:
+                    st.login(OAUTH_PROVIDER)
+                else:
+                    st.login()
+            except Exception as ex:
+                append_auth_audit("oauth_login_error", str(ex))
+                st.error("OAuth ログイン開始時にエラーが発生しました。")
+                st.caption(str(ex))
+                st.info(
+                    "確認ポイント: [auth] の redirect_uri / client_id / client_secret / "
+                    "server_metadata_url と Entra 側 Redirect URI の完全一致"
+                )
         st.stop()
 
     oauth_email = get_oauth_user_email()
@@ -525,7 +534,10 @@ def ensure_oauth_authenticated():
         append_auth_audit("oauth_email_rejected", oauth_email or "empty_email")
         st.error("このメールアドレスは許可されていません。")
         if st.button("OAuthログアウト", use_container_width=True):
-            st.logout()
+            try:
+                st.logout()
+            except Exception as ex:
+                st.caption(str(ex))
         st.stop()
 
     st.session_state["auth_ok"] = True
@@ -654,7 +666,10 @@ if AUTH_ENABLED and st.session_state.get("auth_ok"):
             append_auth_audit("logout", "user_action")
             clear_auth_session()
             if AUTH_STAGE == "oauth" and hasattr(st, "logout"):
-                st.logout()
+                try:
+                    st.logout()
+                except Exception as ex:
+                    st.caption(str(ex))
             st.rerun()
 
 ensure_db_settings()

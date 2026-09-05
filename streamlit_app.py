@@ -449,6 +449,26 @@ def get_oauth_user_email() -> str:
     return ""
 
 
+def get_oauth_identity_candidates(identity: str) -> set[str]:
+    normalized = str(identity or "").strip().lower()
+    if not normalized:
+        return set()
+
+    candidates = {normalized}
+
+    # Entra guest UPN may look like user_domain.com#EXT#@tenant.onmicrosoft.com.
+    # Add a reconstructed primary email candidate for allowlist matching.
+    marker = "#ext#@"
+    marker_pos = normalized.find(marker)
+    if marker_pos > 0:
+        guest_prefix = normalized[:marker_pos]
+        if "_" in guest_prefix:
+            reconstructed = guest_prefix.replace("_", "@", 1)
+            candidates.add(reconstructed)
+
+    return candidates
+
+
 def is_oauth_logged_in() -> bool:
     user_obj = getattr(st, "user", None)
     if user_obj is None:
@@ -532,6 +552,7 @@ def ensure_oauth_authenticated():
         st.stop()
 
     oauth_email = get_oauth_user_email()
+    oauth_candidates = get_oauth_identity_candidates(oauth_email)
     allowlist = parse_allowed_emails(APP_ALLOWED_EMAILS)
     if not oauth_email:
         append_auth_audit("oauth_missing_email_claim", "no_email_or_upn")
@@ -543,9 +564,11 @@ def ensure_oauth_authenticated():
             st.logout()
         st.stop()
 
-    if allowlist and oauth_email not in allowlist:
+    if allowlist and allowlist.isdisjoint(oauth_candidates):
         append_auth_audit("oauth_email_rejected", oauth_email or "empty_email")
         st.error("このメールアドレスは許可されていません。")
+        st.caption("検出された識別子: " + ", ".join(sorted(oauth_candidates)))
+        st.caption("APP_ALLOWED_EMAILS に上記いずれかを追加してください。")
         if st.button("OAuthログアウト", use_container_width=True):
             try:
                 st.logout()

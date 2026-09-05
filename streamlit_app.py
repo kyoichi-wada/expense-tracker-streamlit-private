@@ -781,9 +781,10 @@ with col_list:
     with st.container(border=True):
         st.subheader("明細")
         today_month = month_start(dt.date.today())
+        current_year_end_month = dt.date(today_month.year, 12, 1)
         min_month, max_month = load_month_bounds()
         start_month = min(min_month, today_month)
-        end_month = max(max_month, today_month)
+        end_month = max(max_month, current_year_end_month)
         month_options = build_month_options(start_month, end_month)
         month_options_desc = list(reversed(month_options))
         default_index = month_options_desc.index(today_month) if today_month in month_options_desc else 0

@@ -472,13 +472,18 @@ def oauth_settings_error() -> str | None:
             return f"[auth] の {key} が未設定です。"
 
     required_provider = ["client_id", "client_secret", "server_metadata_url"]
-    if OAUTH_PROVIDER:
-        provider_cfg = auth_cfg.get(OAUTH_PROVIDER)
+
+    provider_name = OAUTH_PROVIDER
+    if not provider_name and auth_cfg.get("microsoft"):
+        provider_name = "microsoft"
+
+    if provider_name:
+        provider_cfg = auth_cfg.get(provider_name)
         if provider_cfg is None:
-            return f"[auth.{OAUTH_PROVIDER}] が未設定です。"
+            return f"[auth.{provider_name}] が未設定です。"
         for key in required_provider:
             if not provider_cfg.get(key):
-                return f"[auth.{OAUTH_PROVIDER}] の {key} が未設定です。"
+                return f"[auth.{provider_name}] の {key} が未設定です。"
         return None
 
     for key in required_provider:
@@ -498,14 +503,22 @@ def ensure_oauth_authenticated():
         st.caption(settings_error)
         st.stop()
 
+    provider_name = OAUTH_PROVIDER
+    try:
+        auth_cfg = st.secrets.get("auth")
+        if not provider_name and auth_cfg and auth_cfg.get("microsoft"):
+            provider_name = "microsoft"
+    except StreamlitSecretNotFoundError:
+        provider_name = OAUTH_PROVIDER
+
     if not is_oauth_logged_in():
         st.markdown("## Private Access")
         st.caption("このアプリは OAuth ログインが必要です。")
         if st.button("OAuthでログイン", use_container_width=True):
             append_auth_audit("oauth_login_start", "user_action")
             try:
-                if OAUTH_PROVIDER:
-                    st.login(OAUTH_PROVIDER)
+                if provider_name:
+                    st.login(provider_name)
                 else:
                     st.login()
             except Exception as ex:

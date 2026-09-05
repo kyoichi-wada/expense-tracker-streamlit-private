@@ -446,6 +446,7 @@ def get_budget_diff(req: func.HttpRequest) -> func.HttpResponse:
             "denominator": progress["denominator"],
             "progress_rate_percent": progress["progress_rate_percent"],
             "diff": diff,
+            "diff_formatted": f"{diff:,}",
         }
         return func.HttpResponse(
             json.dumps(response, ensure_ascii=False),

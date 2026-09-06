@@ -763,6 +763,18 @@ def resolve_selected_categories(raw_values: list[str], category_names: list[str]
     return normalized
 
 
+def build_pretty_color_scale(series: pd.Series) -> alt.Scale:
+    domain = sorted({str(v) for v in series.dropna().tolist()})
+    palette = [
+        "#0ea5e9", "#14b8a6", "#22c55e", "#f59e0b", "#f97316", "#ef4444",
+        "#ec4899", "#8b5cf6", "#6366f1", "#06b6d4", "#84cc16", "#a855f7",
+    ]
+    if not domain:
+        return alt.Scale(range=palette)
+    expanded = [palette[i % len(palette)] for i in range(len(domain))]
+    return alt.Scale(domain=domain, range=expanded)
+
+
 tab_detail, tab_analysis, tab_entry = st.tabs(["① 明細", "② 分析", "③ 記帳"])
 
 with tab_entry:
@@ -791,7 +803,9 @@ with tab_entry:
             amount = st.number_input("金額", min_value=0.0, step=1.0, format="%.0f")
             memo = st.text_input("メモ")
 
-            submitted = st.form_submit_button("登録", use_container_width=True)
+            submit_col, _ = st.columns([0.38, 0.62])
+            with submit_col:
+                submitted = st.form_submit_button("登録", use_container_width=True)
             if submitted:
                 if amount <= 0:
                     st.warning("金額は 1 以上で入力してください。")
@@ -917,7 +931,11 @@ with tab_detail:
                 },
             )
 
-            if st.button("変更を保存", type="primary", use_container_width=True):
+            save_col, _ = st.columns([0.38, 0.62])
+            with save_col:
+                save_clicked = st.button("変更を保存", type="primary", use_container_width=True)
+
+            if save_clicked:
                 category_to_id = {row["category_name"]: row["category_id"] for row in categories}
                 account_to_id = {row["account_name"]: row["account_id"] for row in accounts}
 
@@ -990,7 +1008,7 @@ with tab_detail:
                 else:
                     st.info("変更はありません。")
 
-        sort_col1, sort_col2 = st.columns([1, 1])
+        sort_col1, sort_col2, _ = st.columns([0.32, 0.32, 0.36])
         with sort_col1:
             st.selectbox(
                 "並び替え項目",
@@ -1060,7 +1078,9 @@ with tab_analysis:
 
             month_expense_df = month_base_df[month_base_df["entry_type"] == "expense"].copy()
             month_total = float(month_expense_df["amount"].sum()) if not month_expense_df.empty else 0.0
-            st.metric(f"{analysis_year}年 支出合計", f"{month_total:,.0f}")
+            month_summary_col1, month_summary_col2 = st.columns(2)
+            month_summary_col1.metric(f"{analysis_year}年 支出合計", f"{month_total:,.0f}円")
+            month_summary_col2.metric("月平均", f"{(month_total / 12.0):,.0f}円")
 
             monthly_chart_df = pd.DataFrame(columns=["month_num", "月", "カテゴリ", "金額"])
             if not month_expense_df.empty:
@@ -1090,7 +1110,11 @@ with tab_analysis:
                             title="金額（円）",
                             axis=alt.Axis(format=",.0f", labelExpr="format(datum.value, ',.0f')"),
                         ),
-                        color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
+                        color=alt.Color(
+                            "カテゴリ:N",
+                            scale=build_pretty_color_scale(monthly_chart_df["カテゴリ"]),
+                            legend=alt.Legend(title="カテゴリ"),
+                        ),
                         tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                     )
                     .properties(height=360)
@@ -1120,6 +1144,7 @@ with tab_analysis:
             if not compare_years:
                 st.info("年間比較を表示するには、比較する年を1つ以上選択してください。")
             else:
+                compare_years = sorted(compare_years)
                 annual_start = dt.date(min(compare_years), 1, 1)
                 annual_end = dt.date(max(compare_years), 12, 31)
                 annual_base_df = load_transactions(
@@ -1138,7 +1163,7 @@ with tab_analysis:
 
                 annual_expense_df = annual_base_df[annual_base_df["entry_type"] == "expense"].copy()
                 annual_total = float(annual_expense_df["amount"].sum()) if not annual_expense_df.empty else 0.0
-                st.metric("比較対象年の支出合計", f"{annual_total:,.0f}")
+                st.metric("比較対象年の支出合計", f"{annual_total:,.0f}円")
 
                 annual_chart_df = pd.DataFrame(columns=["年", "カテゴリ", "金額"])
                 if not annual_expense_df.empty:
@@ -1149,6 +1174,16 @@ with tab_analysis:
                     )
                     annual_chart_df["金額"] = annual_chart_df["金額"].astype(float)
 
+                if not annual_chart_df.empty:
+                    annual_year_totals = (
+                        annual_chart_df.groupby("年", as_index=False)["金額"]
+                        .sum()
+                        .sort_values("年")
+                    )
+                    year_cols = st.columns(len(annual_year_totals))
+                    for i, row in enumerate(annual_year_totals.itertuples(index=False)):
+                        year_cols[i].metric(f"{int(row.年)}年 合計", f"{float(row.金額):,.0f}円")
+
                 st.markdown("#### 年間比較（年同士）")
                 if annual_chart_df.empty:
                     st.info("選択した年の支出データがありません。")
@@ -1157,13 +1192,17 @@ with tab_analysis:
                         alt.Chart(annual_chart_df)
                         .mark_bar()
                         .encode(
-                            x=alt.X("年:O", sort="-x", title="年"),
+                            x=alt.X("年:O", sort=compare_years, title="年"),
                             y=alt.Y(
                                 "金額:Q",
                                 title="金額（円）",
                                 axis=alt.Axis(format=",.0f", labelExpr="format(datum.value, ',.0f')"),
                             ),
-                            color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
+                            color=alt.Color(
+                                "カテゴリ:N",
+                                scale=build_pretty_color_scale(annual_chart_df["カテゴリ"]),
+                                legend=alt.Legend(title="カテゴリ"),
+                            ),
                             tooltip=["年:O", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                         )
                         .properties(height=360)

@@ -4,6 +4,7 @@ import secrets
 from contextlib import contextmanager
 from typing import Any
 
+import altair as alt
 import pandas as pd
 import psycopg2
 from psycopg2 import pool, sql
@@ -726,6 +727,10 @@ CATEGORY_FILTER_KEY = "category_filter"
 if CATEGORY_FILTER_KEY not in st.session_state:
     st.session_state[CATEGORY_FILTER_KEY] = default_categories
 
+ANALYSIS_CATEGORY_FILTER_KEY = "analysis_category_filter"
+if ANALYSIS_CATEGORY_FILTER_KEY not in st.session_state:
+    st.session_state[ANALYSIS_CATEGORY_FILTER_KEY] = default_categories
+
 SORT_KEY_NAME = "sort_key_name"
 SORT_DIRECTION_NAME = "sort_direction_name"
 if SORT_KEY_NAME not in st.session_state:
@@ -733,9 +738,32 @@ if SORT_KEY_NAME not in st.session_state:
 if SORT_DIRECTION_NAME not in st.session_state:
     st.session_state[SORT_DIRECTION_NAME] = "降順"
 
-col_form, col_list = st.columns([0.85, 1.75], gap="large")
+DETAIL_MONTH_KEY = "detail_month"
+ANALYSIS_MONTH_KEY = "analysis_month"
 
-with col_form:
+
+def build_month_selector_options() -> tuple[dt.date, list[dt.date], int]:
+    today_month = month_start(dt.date.today())
+    current_year_end_month = dt.date(today_month.year, 12, 1)
+    min_month, max_month = load_month_bounds()
+    start_month = min(min_month, today_month)
+    end_month = max(max_month, current_year_end_month)
+    month_options = build_month_options(start_month, end_month)
+    month_options_desc = list(reversed(month_options))
+    default_index = month_options_desc.index(today_month) if today_month in month_options_desc else 0
+    return today_month, month_options_desc, default_index
+
+
+def resolve_selected_categories(raw_values: list[str], category_names: list[str]) -> list[str]:
+    normalized = [c for c in raw_values if c == "全選択" or c in category_names]
+    if "全選択" in normalized:
+        return category_names
+    return normalized
+
+
+tab_detail, tab_analysis, tab_entry = st.tabs(["① 明細", "② 分析", "③ 記帳"])
+
+with tab_entry:
     with st.container(border=True):
         st.subheader("記帳")
         st.caption("入力項目を指定して取引を登録します")
@@ -777,36 +805,34 @@ with col_form:
                     st.success("登録しました。")
                     st.rerun()
 
-with col_list:
+with tab_detail:
     with st.container(border=True):
         st.subheader("明細")
-        today_month = month_start(dt.date.today())
-        current_year_end_month = dt.date(today_month.year, 12, 1)
-        min_month, max_month = load_month_bounds()
-        start_month = min(min_month, today_month)
-        end_month = max(max_month, current_year_end_month)
-        month_options = build_month_options(start_month, end_month)
-        month_options_desc = list(reversed(month_options))
-        default_index = month_options_desc.index(today_month) if today_month in month_options_desc else 0
+        _, month_options_desc, default_index = build_month_selector_options()
+
+        if DETAIL_MONTH_KEY not in st.session_state:
+            st.session_state[DETAIL_MONTH_KEY] = month_options_desc[default_index]
 
         selected_month = st.selectbox(
             "対象月",
             options=month_options_desc,
-            index=default_index,
+            key=DETAIL_MONTH_KEY,
             format_func=lambda d: d.strftime("%Y年%m月"),
             help="表示する月を選択してください。",
+        )
+
+        st.multiselect(
+            "カテゴリフィルター",
+            options=["全選択"] + all_category_names,
+            key=CATEGORY_FILTER_KEY,
+            help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
         )
 
         sort_key = st.session_state.get(SORT_KEY_NAME, "日付")
         sort_direction = st.session_state.get(SORT_DIRECTION_NAME, "降順")
 
         selected_categories_raw = st.session_state.get(CATEGORY_FILTER_KEY, default_categories)
-        selected_categories_raw = [c for c in selected_categories_raw if c == "全選択" or c in all_category_names]
-
-        if "全選択" in selected_categories_raw:
-            selected_categories = all_category_names
-        else:
-            selected_categories = selected_categories_raw
+        selected_categories = resolve_selected_categories(selected_categories_raw, all_category_names)
 
         start_date = month_start(selected_month)
         end_date = month_end(selected_month)
@@ -969,13 +995,6 @@ with col_list:
                 else:
                     st.info("変更はありません。")
 
-        st.multiselect(
-            "カテゴリフィルター",
-            options=["全選択"] + all_category_names,
-            key=CATEGORY_FILTER_KEY,
-            help="全選択を選ぶと、すべてのカテゴリを対象にします。",
-        )
-
         sort_col1, sort_col2 = st.columns([1, 1])
         with sort_col1:
             st.selectbox(
@@ -989,3 +1008,125 @@ with col_list:
                 ["降順", "昇順"],
                 key=SORT_DIRECTION_NAME,
             )
+
+with tab_analysis:
+    with st.container(border=True):
+        st.subheader("分析")
+        st.caption("月間・年間の支出推移をカテゴリ別に確認できます（固定費は初期状態で除外）。")
+
+        _, month_options_desc, default_index = build_month_selector_options()
+
+        if ANALYSIS_MONTH_KEY not in st.session_state:
+            st.session_state[ANALYSIS_MONTH_KEY] = month_options_desc[default_index]
+
+        analysis_month = st.selectbox(
+            "対象月",
+            options=month_options_desc,
+            key=ANALYSIS_MONTH_KEY,
+            format_func=lambda d: d.strftime("%Y年%m月"),
+            help="分析の基準となる月を選択してください。",
+        )
+
+        st.multiselect(
+            "カテゴリフィルター",
+            options=["全選択"] + all_category_names,
+            key=ANALYSIS_CATEGORY_FILTER_KEY,
+            help="全選択を選ぶと、すべてのカテゴリを対象にします。",
+        )
+
+        analysis_categories_raw = st.session_state.get(ANALYSIS_CATEGORY_FILTER_KEY, default_categories)
+        analysis_categories = resolve_selected_categories(analysis_categories_raw, all_category_names)
+
+        analysis_start = month_start(analysis_month)
+        analysis_end = month_end(analysis_month)
+        selected_year = analysis_month.year
+        year_start = dt.date(selected_year, 1, 1)
+        year_end = dt.date(selected_year, 12, 31)
+
+        month_df = load_transactions(
+            start_date=analysis_start,
+            end_date=analysis_end,
+            sort_key="日付",
+            descending=False,
+        )
+        year_df = load_transactions(
+            start_date=year_start,
+            end_date=year_end,
+            sort_key="日付",
+            descending=False,
+        )
+
+        if analysis_categories:
+            month_df = month_df[month_df["category_name"].isin(analysis_categories)].copy()
+            year_df = year_df[year_df["category_name"].isin(analysis_categories)].copy()
+        else:
+            month_df = month_df.iloc[0:0].copy()
+            year_df = year_df.iloc[0:0].copy()
+
+        month_expense_df = month_df[month_df["entry_type"] == "expense"].copy()
+        year_expense_df = year_df[year_df["entry_type"] == "expense"].copy()
+
+        monthly_total = float(month_expense_df["amount"].sum()) if not month_expense_df.empty else 0.0
+        yearly_total = float(year_expense_df["amount"].sum()) if not year_expense_df.empty else 0.0
+
+        m1, m2 = st.columns(2)
+        m1.metric("対象月の支出合計", f"{monthly_total:,.0f}")
+        m2.metric(f"{selected_year}年の支出合計", f"{yearly_total:,.0f}")
+
+        monthly_chart_df = (
+            month_expense_df.groupby("category_name", as_index=False)["amount"]
+            .sum()
+            .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
+            if not month_expense_df.empty
+            else pd.DataFrame(columns=["カテゴリ", "金額"])
+        )
+
+        annual_chart_df = pd.DataFrame(columns=["月", "カテゴリ", "金額"])
+        if not year_expense_df.empty:
+            annual_chart_df = year_expense_df.copy()
+            annual_chart_df["month_num"] = pd.to_datetime(annual_chart_df["transaction_date"]).dt.month
+            annual_chart_df["月"] = annual_chart_df["month_num"].apply(lambda m: f"{int(m)}月")
+            annual_chart_df = (
+                annual_chart_df.groupby(["month_num", "月", "category_name"], as_index=False)["amount"]
+                .sum()
+                .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
+                .sort_values(["month_num", "カテゴリ"])
+            )
+
+        chart_col1, chart_col2 = st.columns(2)
+        with chart_col1:
+            st.markdown("#### 月間（カテゴリ別）")
+            if monthly_chart_df.empty:
+                st.info("対象月の支出データがありません。")
+            else:
+                monthly_chart = (
+                    alt.Chart(monthly_chart_df)
+                    .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+                    .encode(
+                        x=alt.X("カテゴリ:N", sort="-y", title="カテゴリ"),
+                        y=alt.Y("金額:Q", title="金額"),
+                        color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
+                        tooltip=["カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
+                    )
+                    .properties(height=320)
+                )
+                st.altair_chart(monthly_chart, use_container_width=True)
+
+        with chart_col2:
+            st.markdown(f"#### 年間（{selected_year}年・月別×カテゴリ）")
+            if annual_chart_df.empty:
+                st.info("対象年の支出データがありません。")
+            else:
+                month_order = [f"{i}月" for i in range(1, 13)]
+                annual_chart = (
+                    alt.Chart(annual_chart_df)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("月:N", sort=month_order, title="月"),
+                        y=alt.Y("金額:Q", title="金額"),
+                        color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
+                        tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
+                    )
+                    .properties(height=320)
+                )
+                st.altair_chart(annual_chart, use_container_width=True)

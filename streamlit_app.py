@@ -823,13 +823,6 @@ with tab_detail:
             help="表示する月を選択してください。",
         )
 
-        st.multiselect(
-            "カテゴリフィルター",
-            options=["全選択"] + all_category_names,
-            key=CATEGORY_FILTER_KEY,
-            help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
-        )
-
         sort_key = st.session_state.get(SORT_KEY_NAME, "日付")
         sort_direction = st.session_state.get(SORT_DIRECTION_NAME, "降順")
 
@@ -1011,6 +1004,13 @@ with tab_detail:
                 key=SORT_DIRECTION_NAME,
             )
 
+        st.multiselect(
+            "カテゴリフィルター",
+            options=["全選択"] + all_category_names,
+            key=CATEGORY_FILTER_KEY,
+            help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
+        )
+
 with tab_analysis:
     with st.container(border=True):
         st.subheader("分析")
@@ -1038,13 +1038,6 @@ with tab_analysis:
             options=year_options,
             key=ANALYSIS_YEAR_KEY,
             help="月間比較で使用する年を選択してください。",
-        )
-
-        st.multiselect(
-            "カテゴリフィルター",
-            options=["全選択"] + all_category_names,
-            key=ANALYSIS_CATEGORY_FILTER_KEY,
-            help="全選択を選ぶと、すべてのカテゴリを対象にします。",
         )
 
         analysis_categories_raw = st.session_state.get(ANALYSIS_CATEGORY_FILTER_KEY, default_categories)
@@ -1091,7 +1084,7 @@ with tab_analysis:
                     .mark_bar()
                     .encode(
                         x=alt.X("月:N", sort=month_order, title="月"),
-                        y=alt.Y("金額:Q", title="金額"),
+                        y=alt.Y("金額:Q", title="金額", axis=alt.Axis(format=",.0f")),
                         color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
                         tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                     )
@@ -1100,10 +1093,17 @@ with tab_analysis:
                 st.altair_chart(monthly_chart, use_container_width=True)
         else:
             if ANALYSIS_COMPARE_YEARS_KEY not in st.session_state:
-                default_compare_years = [analysis_year]
-                if (analysis_year - 1) in year_options:
-                    default_compare_years.append(analysis_year - 1)
-                st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = default_compare_years
+                default_compare_years = [
+                    y for y in [analysis_year, analysis_year - 1, analysis_year - 2] if y in year_options
+                ]
+                st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = default_compare_years or [analysis_year]
+            else:
+                current_compare_years = [
+                    y for y in st.session_state.get(ANALYSIS_COMPARE_YEARS_KEY, []) if y in year_options
+                ]
+                if not current_compare_years:
+                    current_compare_years = [analysis_year]
+                st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = current_compare_years
 
             compare_years = st.multiselect(
                 "比較する年",
@@ -1152,10 +1152,17 @@ with tab_analysis:
                         .mark_bar()
                         .encode(
                             x=alt.X("年:O", sort="-x", title="年"),
-                            y=alt.Y("金額:Q", title="金額"),
+                            y=alt.Y("金額:Q", title="金額", axis=alt.Axis(format=",.0f")),
                             color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
                             tooltip=["年:O", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                         )
                         .properties(height=360)
                     )
                     st.altair_chart(annual_chart, use_container_width=True)
+
+        st.multiselect(
+            "カテゴリフィルター",
+            options=["全選択"] + all_category_names,
+            key=ANALYSIS_CATEGORY_FILTER_KEY,
+            help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
+        )

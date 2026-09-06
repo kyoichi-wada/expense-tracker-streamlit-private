@@ -1073,6 +1073,7 @@ with tab_analysis:
                     .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
                     .sort_values(["month_num", "カテゴリ"])
                 )
+                monthly_chart_df["金額"] = monthly_chart_df["金額"].astype(float)
 
             st.markdown(f"#### 月間比較（{analysis_year}年 1月-12月）")
             if monthly_chart_df.empty:
@@ -1084,7 +1085,11 @@ with tab_analysis:
                     .mark_bar()
                     .encode(
                         x=alt.X("月:N", sort=month_order, title="月"),
-                        y=alt.Y("金額:Q", title="金額", axis=alt.Axis(format=",.0f")),
+                        y=alt.Y(
+                            "金額:Q",
+                            title="金額（円）",
+                            axis=alt.Axis(format=",.0f", labelExpr="format(datum.value, ',.0f')"),
+                        ),
                         color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
                         tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                     )
@@ -1142,6 +1147,7 @@ with tab_analysis:
                         .sum()
                         .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
                     )
+                    annual_chart_df["金額"] = annual_chart_df["金額"].astype(float)
 
                 st.markdown("#### 年間比較（年同士）")
                 if annual_chart_df.empty:
@@ -1152,7 +1158,11 @@ with tab_analysis:
                         .mark_bar()
                         .encode(
                             x=alt.X("年:O", sort="-x", title="年"),
-                            y=alt.Y("金額:Q", title="金額", axis=alt.Axis(format=",.0f")),
+                            y=alt.Y(
+                                "金額:Q",
+                                title="金額（円）",
+                                axis=alt.Axis(format=",.0f", labelExpr="format(datum.value, ',.0f')"),
+                            ),
                             color=alt.Color("カテゴリ:N", legend=alt.Legend(title="カテゴリ")),
                             tooltip=["年:O", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                         )

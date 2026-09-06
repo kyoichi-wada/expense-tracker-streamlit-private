@@ -899,8 +899,7 @@ with tab_detail:
             progress_rate = float(budget_progress["progress_rate_percent"])
             annual_budget = float(budget_progress["annual_budget"])
             denominator = float(budget_progress["denominator"])
-            monthly_budget = annual_budget / 12.0
-            monthly_balance = monthly_budget - monthly_expense_total
+            monthly_balance = denominator - ytd_expense_total
             annual_balance = annual_budget - ytd_expense_total
 
             c3.metric("予算進捗率", f"{progress_rate:.2f}%")
@@ -1099,9 +1098,13 @@ if tab_analysis is not None:
 
                 month_expense_df = month_base_df[month_base_df["entry_type"] == "expense"].copy()
                 month_total = float(month_expense_df["amount"].sum()) if not month_expense_df.empty else 0.0
+                if analysis_year == current_year:
+                    months_for_avg = max(1, dt.date.today().month)
+                else:
+                    months_for_avg = 12
                 month_summary_col1, month_summary_col2 = st.columns(2)
                 month_summary_col1.metric(f"{analysis_year}年 支出合計", f"{month_total:,.0f}円")
-                month_summary_col2.metric("月平均", f"{(month_total / 12.0):,.0f}円")
+                month_summary_col2.metric("月平均", f"{(month_total / months_for_avg):,.0f}円")
 
                 monthly_chart_df = pd.DataFrame(columns=["month_num", "月", "カテゴリ", "金額"])
                 if not month_expense_df.empty:
@@ -1208,16 +1211,6 @@ if tab_analysis is not None:
                             .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
                         )
                         annual_chart_df["金額"] = annual_chart_df["金額"].astype(float)
-
-                    if not annual_chart_df.empty:
-                        annual_year_totals = (
-                            annual_chart_df.groupby("年", as_index=False)["金額"]
-                            .sum()
-                            .sort_values("年")
-                        )
-                        year_cols = st.columns(len(annual_year_totals))
-                        for i, row in enumerate(annual_year_totals.itertuples(index=False)):
-                            year_cols[i].metric(f"{int(row.年)}年 合計", f"{float(row.金額):,.0f}円")
 
                     st.markdown("#### 年間比較（年同士）")
                     if annual_chart_df.empty:

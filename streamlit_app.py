@@ -775,7 +775,25 @@ def build_pretty_color_scale(series: pd.Series) -> alt.Scale:
     return alt.Scale(domain=domain, range=expanded)
 
 
-tab_detail, tab_analysis, tab_entry = st.tabs(["① 明細", "② 分析", "③ 記帳"])
+def is_iphone_access() -> bool:
+    try:
+        ctx = getattr(st, "context", None)
+        headers = getattr(ctx, "headers", None)
+        if headers is None:
+            return False
+        user_agent = str(headers.get("user-agent", "") or "").lower()
+        return "iphone" in user_agent
+    except Exception:
+        return False
+
+
+iphone_access = is_iphone_access()
+
+if iphone_access:
+    tab_detail, tab_entry = st.tabs(["明細", "記帳"])
+    tab_analysis = None
+else:
+    tab_detail, tab_analysis, tab_entry = st.tabs(["明細", "分析", "記帳"])
 
 with tab_entry:
     with st.container(border=True):
@@ -874,16 +892,20 @@ with tab_detail:
 
         budget_progress = load_budget_progress(end_date)
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("支出の合計", f"{monthly_expense_total:,.0f}")
         c2.metric("これまでの合計額（年額）", f"{ytd_expense_total:,.0f}")
         if budget_progress:
             progress_rate = float(budget_progress["progress_rate_percent"])
+            annual_budget = float(budget_progress["annual_budget"])
             denominator = float(budget_progress["denominator"])
-            diff = denominator - ytd_expense_total
+            monthly_budget = annual_budget / 12.0
+            monthly_balance = monthly_budget - monthly_expense_total
+            annual_balance = annual_budget - ytd_expense_total
 
             c3.metric("予算進捗率", f"{progress_rate:.2f}%")
-            c4.metric("差分", f"{diff:,.0f}")
+            c4.metric("残高（月間）", f"{monthly_balance:,.0f}")
+            c5.metric("残高（年間）", f"{annual_balance:,.0f}")
             st.caption(
                 "予算進捗: "
                 f"{float(budget_progress['numerator']):,.0f} / {float(budget_progress['denominator']):,.0f} "
@@ -891,7 +913,8 @@ with tab_detail:
             )
         else:
             c3.metric("予算進捗率", "- %")
-            c4.metric("差分", "-")
+            c4.metric("残高（月間）", "-")
+            c5.metric("残高（年間）", "-")
             st.caption("該当年の予算マスタが未登録です。")
 
         if df.empty:
@@ -1025,184 +1048,84 @@ with tab_detail:
             help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
         )
 
-with tab_analysis:
-    with st.container(border=True):
-        st.subheader("分析")
-        st.caption("月間は対象年の月比較、年間は年同士の比較を表示します（固定費は初期状態で除外）。")
+if tab_analysis is not None:
+    with tab_analysis:
+        with st.container(border=True):
+            st.subheader("分析")
+            st.caption("月間は対象年の月比較、年間は年同士の比較を表示します（固定費は初期状態で除外）。")
 
-        analysis_mode = st.segmented_control(
-            "表示モード",
-            options=["月間", "年間"],
-            default=st.session_state.get(ANALYSIS_MODE_KEY, "月間"),
-            key=ANALYSIS_MODE_KEY,
-            help="ボタンで月間比較 / 年間比較を切り替えます。",
-        )
-
-        current_year = dt.date.today().year
-        min_month, max_month = load_month_bounds()
-        min_year = min(min_month.year, current_year)
-        max_year = max(max_month.year, current_year)
-        year_options = list(range(max_year, min_year - 1, -1))
-
-        if ANALYSIS_YEAR_KEY not in st.session_state:
-            st.session_state[ANALYSIS_YEAR_KEY] = current_year if current_year in year_options else year_options[0]
-
-        analysis_year = st.selectbox(
-            "対象年",
-            options=year_options,
-            key=ANALYSIS_YEAR_KEY,
-            help="月間比較で使用する年を選択してください。",
-        )
-
-        analysis_categories_raw = st.session_state.get(ANALYSIS_CATEGORY_FILTER_KEY, default_categories)
-        analysis_categories = resolve_selected_categories(analysis_categories_raw, all_category_names)
-
-        if analysis_mode == "月間":
-            month_start_date = dt.date(analysis_year, 1, 1)
-            month_end_date = dt.date(analysis_year, 12, 31)
-            month_base_df = load_transactions(
-                start_date=month_start_date,
-                end_date=month_end_date,
-                sort_key="日付",
-                descending=False,
+            analysis_mode = st.segmented_control(
+                "表示モード",
+                options=["月間", "年間"],
+                default=st.session_state.get(ANALYSIS_MODE_KEY, "月間"),
+                key=ANALYSIS_MODE_KEY,
+                help="ボタンで月間比較 / 年間比較を切り替えます。",
             )
 
-            if analysis_categories:
-                month_base_df = month_base_df[month_base_df["category_name"].isin(analysis_categories)].copy()
-            else:
-                month_base_df = month_base_df.iloc[0:0].copy()
+            current_year = dt.date.today().year
+            _, max_month = load_month_bounds()
+            max_year = max(max_month.year, current_year)
+            year_options = list(range(max_year, 2020, -1))
+            if not year_options:
+                year_options = [current_year]
 
-            month_expense_df = month_base_df[month_base_df["entry_type"] == "expense"].copy()
-            month_total = float(month_expense_df["amount"].sum()) if not month_expense_df.empty else 0.0
-            month_summary_col1, month_summary_col2 = st.columns(2)
-            month_summary_col1.metric(f"{analysis_year}年 支出合計", f"{month_total:,.0f}円")
-            month_summary_col2.metric("月平均", f"{(month_total / 12.0):,.0f}円")
+            if ANALYSIS_YEAR_KEY not in st.session_state:
+                st.session_state[ANALYSIS_YEAR_KEY] = current_year if current_year in year_options else year_options[0]
 
-            monthly_chart_df = pd.DataFrame(columns=["month_num", "月", "カテゴリ", "金額"])
-            if not month_expense_df.empty:
-                monthly_chart_df = month_expense_df.copy()
-                monthly_chart_df["month_num"] = pd.to_datetime(monthly_chart_df["transaction_date"]).dt.month
-                monthly_chart_df["月"] = monthly_chart_df["month_num"].apply(lambda m: f"{int(m)}月")
-                monthly_chart_df = (
-                    monthly_chart_df.groupby(["month_num", "月", "category_name"], as_index=False)["amount"]
-                    .sum()
-                    .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
-                    .sort_values(["month_num", "カテゴリ"])
-                )
-                monthly_chart_df["金額"] = monthly_chart_df["金額"].astype(float)
-
-            st.markdown(f"#### 月間比較（{analysis_year}年 1月-12月）")
-            if monthly_chart_df.empty:
-                st.info("対象年の支出データがありません。")
-            else:
-                month_order = [f"{i}月" for i in range(1, 13)]
-                monthly_bar_chart = (
-                    alt.Chart(monthly_chart_df)
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("月:N", sort=month_order, title="月"),
-                        y=alt.Y(
-                            "金額:Q",
-                            title="金額（円）",
-                            axis=alt.Axis(format=",.0f", labelExpr="format(datum.value, ',.0f')"),
-                        ),
-                        color=alt.Color(
-                            "カテゴリ:N",
-                            scale=build_pretty_color_scale(monthly_chart_df["カテゴリ"]),
-                            legend=alt.Legend(title="カテゴリ"),
-                        ),
-                        tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
-                    )
-                )
-                monthly_totals_df = (
-                    monthly_chart_df.groupby(["month_num", "月"], as_index=False)["金額"]
-                    .sum()
-                    .sort_values("month_num")
-                )
-                monthly_total_labels = (
-                    alt.Chart(monthly_totals_df)
-                    .mark_text(dy=-8, color="#6b7280", fontSize=12, fontWeight="bold")
-                    .encode(
-                        x=alt.X("月:N", sort=month_order),
-                        y=alt.Y("金額:Q"),
-                        text=alt.Text("金額:Q", format=",.0f"),
-                    )
-                )
-                monthly_chart = alt.layer(monthly_bar_chart, monthly_total_labels).properties(height=380)
-                st.altair_chart(monthly_chart, use_container_width=True)
-        else:
-            if ANALYSIS_COMPARE_YEARS_KEY not in st.session_state:
-                default_compare_years = [
-                    y for y in [analysis_year, analysis_year - 1, analysis_year - 2] if y in year_options
-                ]
-                st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = default_compare_years or [analysis_year]
-            else:
-                current_compare_years = [
-                    y for y in st.session_state.get(ANALYSIS_COMPARE_YEARS_KEY, []) if y in year_options
-                ]
-                if not current_compare_years:
-                    current_compare_years = [analysis_year]
-                st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = current_compare_years
-
-            compare_years = st.multiselect(
-                "比較する年",
+            analysis_year = st.selectbox(
+                "対象年",
                 options=year_options,
-                key=ANALYSIS_COMPARE_YEARS_KEY,
-                help="年間比較で表示する年を選択してください。",
+                key=ANALYSIS_YEAR_KEY,
+                help="月間比較で使用する年を選択してください。",
             )
 
-            if not compare_years:
-                st.info("年間比較を表示するには、比較する年を1つ以上選択してください。")
-            else:
-                compare_years = sorted(compare_years)
-                annual_start = dt.date(min(compare_years), 1, 1)
-                annual_end = dt.date(max(compare_years), 12, 31)
-                annual_base_df = load_transactions(
-                    start_date=annual_start,
-                    end_date=annual_end,
+            analysis_categories_raw = st.session_state.get(ANALYSIS_CATEGORY_FILTER_KEY, default_categories)
+            analysis_categories = resolve_selected_categories(analysis_categories_raw, all_category_names)
+
+            if analysis_mode == "月間":
+                month_start_date = dt.date(analysis_year, 1, 1)
+                month_end_date = dt.date(analysis_year, 12, 31)
+                month_base_df = load_transactions(
+                    start_date=month_start_date,
+                    end_date=month_end_date,
                     sort_key="日付",
                     descending=False,
                 )
-                annual_base_df["年"] = pd.to_datetime(annual_base_df["transaction_date"]).dt.year
-                annual_base_df = annual_base_df[annual_base_df["年"].isin(compare_years)].copy()
 
                 if analysis_categories:
-                    annual_base_df = annual_base_df[annual_base_df["category_name"].isin(analysis_categories)].copy()
+                    month_base_df = month_base_df[month_base_df["category_name"].isin(analysis_categories)].copy()
                 else:
-                    annual_base_df = annual_base_df.iloc[0:0].copy()
+                    month_base_df = month_base_df.iloc[0:0].copy()
 
-                annual_expense_df = annual_base_df[annual_base_df["entry_type"] == "expense"].copy()
-                annual_total = float(annual_expense_df["amount"].sum()) if not annual_expense_df.empty else 0.0
-                st.metric("比較対象年の支出合計", f"{annual_total:,.0f}円")
+                month_expense_df = month_base_df[month_base_df["entry_type"] == "expense"].copy()
+                month_total = float(month_expense_df["amount"].sum()) if not month_expense_df.empty else 0.0
+                month_summary_col1, month_summary_col2 = st.columns(2)
+                month_summary_col1.metric(f"{analysis_year}年 支出合計", f"{month_total:,.0f}円")
+                month_summary_col2.metric("月平均", f"{(month_total / 12.0):,.0f}円")
 
-                annual_chart_df = pd.DataFrame(columns=["年", "カテゴリ", "金額"])
-                if not annual_expense_df.empty:
-                    annual_chart_df = (
-                        annual_expense_df.groupby(["年", "category_name"], as_index=False)["amount"]
+                monthly_chart_df = pd.DataFrame(columns=["month_num", "月", "カテゴリ", "金額"])
+                if not month_expense_df.empty:
+                    monthly_chart_df = month_expense_df.copy()
+                    monthly_chart_df["month_num"] = pd.to_datetime(monthly_chart_df["transaction_date"]).dt.month
+                    monthly_chart_df["月"] = monthly_chart_df["month_num"].apply(lambda m: f"{int(m)}月")
+                    monthly_chart_df = (
+                        monthly_chart_df.groupby(["month_num", "月", "category_name"], as_index=False)["amount"]
                         .sum()
                         .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
+                        .sort_values(["month_num", "カテゴリ"])
                     )
-                    annual_chart_df["金額"] = annual_chart_df["金額"].astype(float)
+                    monthly_chart_df["金額"] = monthly_chart_df["金額"].astype(float)
 
-                if not annual_chart_df.empty:
-                    annual_year_totals = (
-                        annual_chart_df.groupby("年", as_index=False)["金額"]
-                        .sum()
-                        .sort_values("年")
-                    )
-                    year_cols = st.columns(len(annual_year_totals))
-                    for i, row in enumerate(annual_year_totals.itertuples(index=False)):
-                        year_cols[i].metric(f"{int(row.年)}年 合計", f"{float(row.金額):,.0f}円")
-
-                st.markdown("#### 年間比較（年同士）")
-                if annual_chart_df.empty:
-                    st.info("選択した年の支出データがありません。")
+                st.markdown(f"#### 月間比較（{analysis_year}年 1月-12月）")
+                if monthly_chart_df.empty:
+                    st.info("対象年の支出データがありません。")
                 else:
-                    annual_chart = (
-                        alt.Chart(annual_chart_df)
+                    month_order = [f"{i}月" for i in range(1, 13)]
+                    monthly_bar_chart = (
+                        alt.Chart(monthly_chart_df)
                         .mark_bar()
                         .encode(
-                            x=alt.X("年:O", sort=compare_years, title="年"),
+                            x=alt.X("月:N", sort=month_order, title="月"),
                             y=alt.Y(
                                 "金額:Q",
                                 title="金額（円）",
@@ -1210,32 +1133,134 @@ with tab_analysis:
                             ),
                             color=alt.Color(
                                 "カテゴリ:N",
-                                scale=build_pretty_color_scale(annual_chart_df["カテゴリ"]),
+                                scale=build_pretty_color_scale(monthly_chart_df["カテゴリ"]),
                                 legend=alt.Legend(title="カテゴリ"),
                             ),
-                            tooltip=["年:O", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
+                            tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                         )
                     )
-                    annual_totals_df = (
-                        annual_chart_df.groupby("年", as_index=False)["金額"]
+                    monthly_totals_df = (
+                        monthly_chart_df.groupby(["month_num", "月"], as_index=False)["金額"]
                         .sum()
-                        .sort_values("年")
+                        .sort_values("month_num")
                     )
-                    annual_total_labels = (
-                        alt.Chart(annual_totals_df)
+                    monthly_total_labels = (
+                        alt.Chart(monthly_totals_df)
                         .mark_text(dy=-8, color="#6b7280", fontSize=12, fontWeight="bold")
                         .encode(
-                            x=alt.X("年:O", sort=compare_years),
+                            x=alt.X("月:N", sort=month_order),
                             y=alt.Y("金額:Q"),
                             text=alt.Text("金額:Q", format=",.0f"),
                         )
                     )
-                    annual_chart = alt.layer(annual_chart, annual_total_labels).properties(height=380)
-                    st.altair_chart(annual_chart, use_container_width=True)
+                    monthly_chart = alt.layer(monthly_bar_chart, monthly_total_labels).properties(height=380)
+                    st.altair_chart(monthly_chart, use_container_width=True)
+            else:
+                if ANALYSIS_COMPARE_YEARS_KEY not in st.session_state:
+                    default_compare_years = [
+                        y for y in [analysis_year, analysis_year - 1, analysis_year - 2] if y in year_options
+                    ]
+                    st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = default_compare_years or [analysis_year]
+                else:
+                    current_compare_years = [
+                        y for y in st.session_state.get(ANALYSIS_COMPARE_YEARS_KEY, []) if y in year_options
+                    ]
+                    if not current_compare_years:
+                        current_compare_years = [analysis_year]
+                    st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = current_compare_years
 
-        st.multiselect(
-            "カテゴリフィルター",
-            options=["全選択"] + all_category_names,
-            key=ANALYSIS_CATEGORY_FILTER_KEY,
-            help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
-        )
+                compare_years = st.multiselect(
+                    "比較する年",
+                    options=year_options,
+                    key=ANALYSIS_COMPARE_YEARS_KEY,
+                    help="年間比較で表示する年を選択してください。",
+                )
+
+                if not compare_years:
+                    st.info("年間比較を表示するには、比較する年を1つ以上選択してください。")
+                else:
+                    compare_years = sorted(compare_years)
+                    annual_start = dt.date(min(compare_years), 1, 1)
+                    annual_end = dt.date(max(compare_years), 12, 31)
+                    annual_base_df = load_transactions(
+                        start_date=annual_start,
+                        end_date=annual_end,
+                        sort_key="日付",
+                        descending=False,
+                    )
+                    annual_base_df["年"] = pd.to_datetime(annual_base_df["transaction_date"]).dt.year
+                    annual_base_df = annual_base_df[annual_base_df["年"].isin(compare_years)].copy()
+
+                    if analysis_categories:
+                        annual_base_df = annual_base_df[annual_base_df["category_name"].isin(analysis_categories)].copy()
+                    else:
+                        annual_base_df = annual_base_df.iloc[0:0].copy()
+
+                    annual_expense_df = annual_base_df[annual_base_df["entry_type"] == "expense"].copy()
+                    annual_total = float(annual_expense_df["amount"].sum()) if not annual_expense_df.empty else 0.0
+                    st.metric("比較対象年の支出合計", f"{annual_total:,.0f}円")
+
+                    annual_chart_df = pd.DataFrame(columns=["年", "カテゴリ", "金額"])
+                    if not annual_expense_df.empty:
+                        annual_chart_df = (
+                            annual_expense_df.groupby(["年", "category_name"], as_index=False)["amount"]
+                            .sum()
+                            .rename(columns={"category_name": "カテゴリ", "amount": "金額"})
+                        )
+                        annual_chart_df["金額"] = annual_chart_df["金額"].astype(float)
+
+                    if not annual_chart_df.empty:
+                        annual_year_totals = (
+                            annual_chart_df.groupby("年", as_index=False)["金額"]
+                            .sum()
+                            .sort_values("年")
+                        )
+                        year_cols = st.columns(len(annual_year_totals))
+                        for i, row in enumerate(annual_year_totals.itertuples(index=False)):
+                            year_cols[i].metric(f"{int(row.年)}年 合計", f"{float(row.金額):,.0f}円")
+
+                    st.markdown("#### 年間比較（年同士）")
+                    if annual_chart_df.empty:
+                        st.info("選択した年の支出データがありません。")
+                    else:
+                        annual_bar_chart = (
+                            alt.Chart(annual_chart_df)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X("年:O", sort=compare_years, title="年"),
+                                y=alt.Y(
+                                    "金額:Q",
+                                    title="金額（円）",
+                                    axis=alt.Axis(format=",.0f", labelExpr="format(datum.value, ',.0f')"),
+                                ),
+                                color=alt.Color(
+                                    "カテゴリ:N",
+                                    scale=build_pretty_color_scale(annual_chart_df["カテゴリ"]),
+                                    legend=alt.Legend(title="カテゴリ"),
+                                ),
+                                tooltip=["年:O", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
+                            )
+                        )
+                        annual_totals_df = (
+                            annual_chart_df.groupby("年", as_index=False)["金額"]
+                            .sum()
+                            .sort_values("年")
+                        )
+                        annual_total_labels = (
+                            alt.Chart(annual_totals_df)
+                            .mark_text(dy=-8, color="#6b7280", fontSize=12, fontWeight="bold")
+                            .encode(
+                                x=alt.X("年:O", sort=compare_years),
+                                y=alt.Y("金額:Q"),
+                                text=alt.Text("金額:Q", format=",.0f"),
+                            )
+                        )
+                        annual_chart = alt.layer(annual_bar_chart, annual_total_labels).properties(height=380)
+                        st.altair_chart(annual_chart, use_container_width=True)
+
+            st.multiselect(
+                "カテゴリフィルター",
+                options=["全選択"] + all_category_names,
+                key=ANALYSIS_CATEGORY_FILTER_KEY,
+                help="全選択を選ぶと、すべてのカテゴリを対象にします。固定費は初期状態で除外しています。",
+            )

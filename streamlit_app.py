@@ -1064,7 +1064,7 @@ if tab_analysis is not None:
             current_year = dt.date.today().year
             _, max_month = load_month_bounds()
             max_year = max(max_month.year, current_year)
-            year_options = list(range(max_year, 2020, -1))
+            year_options = list(range(2021, max_year + 1))
             if not year_options:
                 year_options = [current_year]
 
@@ -1160,9 +1160,7 @@ if tab_analysis is not None:
                     st.altair_chart(monthly_chart, use_container_width=True)
             else:
                 if ANALYSIS_COMPARE_YEARS_KEY not in st.session_state:
-                    default_compare_years = [
-                        y for y in [analysis_year, analysis_year - 1, analysis_year - 2] if y in year_options
-                    ]
+                    default_compare_years = list(year_options)
                     st.session_state[ANALYSIS_COMPARE_YEARS_KEY] = default_compare_years or [analysis_year]
                 else:
                     current_compare_years = [

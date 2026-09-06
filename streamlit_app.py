@@ -803,9 +803,7 @@ with tab_entry:
             amount = st.number_input("金額", min_value=0.0, step=1.0, format="%.0f")
             memo = st.text_input("メモ")
 
-            submit_col, _ = st.columns([0.38, 0.62])
-            with submit_col:
-                submitted = st.form_submit_button("登録", use_container_width=True)
+            submitted = st.form_submit_button("登録", use_container_width=True)
             if submitted:
                 if amount <= 0:
                     st.warning("金額は 1 以上で入力してください。")
@@ -931,9 +929,7 @@ with tab_detail:
                 },
             )
 
-            save_col, _ = st.columns([0.38, 0.62])
-            with save_col:
-                save_clicked = st.button("変更を保存", type="primary", use_container_width=True)
+            save_clicked = st.button("変更を保存", type="primary", use_container_width=True)
 
             if save_clicked:
                 category_to_id = {row["category_name"]: row["category_id"] for row in categories}
@@ -1100,7 +1096,7 @@ with tab_analysis:
                 st.info("対象年の支出データがありません。")
             else:
                 month_order = [f"{i}月" for i in range(1, 13)]
-                monthly_chart = (
+                monthly_bar_chart = (
                     alt.Chart(monthly_chart_df)
                     .mark_bar()
                     .encode(
@@ -1117,8 +1113,22 @@ with tab_analysis:
                         ),
                         tooltip=["月:N", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                     )
-                    .properties(height=360)
                 )
+                monthly_totals_df = (
+                    monthly_chart_df.groupby(["month_num", "月"], as_index=False)["金額"]
+                    .sum()
+                    .sort_values("month_num")
+                )
+                monthly_total_labels = (
+                    alt.Chart(monthly_totals_df)
+                    .mark_text(dy=-8, color="#6b7280", fontSize=12, fontWeight="bold")
+                    .encode(
+                        x=alt.X("月:N", sort=month_order),
+                        y=alt.Y("金額:Q"),
+                        text=alt.Text("金額:Q", format=",.0f"),
+                    )
+                )
+                monthly_chart = alt.layer(monthly_bar_chart, monthly_total_labels).properties(height=380)
                 st.altair_chart(monthly_chart, use_container_width=True)
         else:
             if ANALYSIS_COMPARE_YEARS_KEY not in st.session_state:
@@ -1205,8 +1215,22 @@ with tab_analysis:
                             ),
                             tooltip=["年:O", "カテゴリ:N", alt.Tooltip("金額:Q", format=",.0f")],
                         )
-                        .properties(height=360)
                     )
+                    annual_totals_df = (
+                        annual_chart_df.groupby("年", as_index=False)["金額"]
+                        .sum()
+                        .sort_values("年")
+                    )
+                    annual_total_labels = (
+                        alt.Chart(annual_totals_df)
+                        .mark_text(dy=-8, color="#6b7280", fontSize=12, fontWeight="bold")
+                        .encode(
+                            x=alt.X("年:O", sort=compare_years),
+                            y=alt.Y("金額:Q"),
+                            text=alt.Text("金額:Q", format=",.0f"),
+                        )
+                    )
+                    annual_chart = alt.layer(annual_chart, annual_total_labels).properties(height=380)
                     st.altair_chart(annual_chart, use_container_width=True)
 
         st.multiselect(
